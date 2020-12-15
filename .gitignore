@@ -1,0 +1,4 @@
+*.tfrecord
+AliceCorpus/
+temp/
+.vscode/
