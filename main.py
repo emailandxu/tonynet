@@ -1,4 +1,4 @@
-import dataloader as dl
+from dataloader import Dataloader
 import tensorflow as tf
 import time, os 
 from models import *
@@ -89,9 +89,13 @@ def loss_function(real, pred):
 
   return tf.reduce_mean(loss_)
 
+
 if __name__ == "__main__":
+  from base_option import parser
+  args = parser.parse_args()
   IS_AUDIO = False
   EPOCHS = 10
+  dl = Dataloader(filename=[args.dataset])
   alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
   # alice_asr_ds,_ = dl.get_alice_asr_dataset()
 
@@ -153,7 +157,5 @@ if __name__ == "__main__":
     print('Epoch {} Loss {:.4f}'.format(epoch + 1,
                                         total_loss / steps_per_epoch))
     print('Time taken for 1 epoch {} sec\n'.format(time.time() - start))
-
-
 
 
