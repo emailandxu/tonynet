@@ -3,3 +3,4 @@ AliceCorpus/
 temp/
 .vscode/
 *.pyc
+training_checkpoints

@@ -93,7 +93,7 @@ def loss_function(real, pred):
 if __name__ == "__main__":
   from base_option import parser
   args = parser.parse_args()
-  IS_AUDIO = False
+  IS_AUDIO = args.isaudio
   EPOCHS = 10
   dl = Dataloader(filename=[args.dataset])
   alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
@@ -145,6 +145,7 @@ if __name__ == "__main__":
         batch_loss = train_step(inp, targ, enc_hidden)
       else:
         batch_loss = train_step(targ, targ, enc_hidden)
+        
       total_loss += batch_loss.numpy()
       if batch % 1 == 0:
           print('Epoch {} Batch {} Loss {:.4f}'.format(epoch + 1,
