@@ -90,8 +90,8 @@ def main():
     return batch_loss
 
   from base_option import parser
-  # args = parser.parse_args(["--isaudio", "--dataset","../gdrive/MyDrive/corpus/alice_asr.tfrecord"])
-  args = parser.parse_args()
+  args = parser.parse_args(["--isaudio", "--dataset","./AliceCorpus/alice_asr.tfrecord"])
+  # args = parser.parse_args()
   IS_AUDIO = args.isaudio
   EPOCHS = 10
   dl = Dataloader(filename=[args.dataset])
