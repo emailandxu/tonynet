@@ -3,8 +3,8 @@ import tensorflow as tf
 import time, os 
 from models import *
 import pdb
-import psutil
 from functools import wraps
+from util.mem_check_util import mem_check
 
 def main():
   def loss_function(real, pred):
@@ -53,7 +53,7 @@ def main():
     return batch_loss
 
   from base_option import parser
-  args = parser.parse_args(["--isaudio", "--dataset","./AliceCorpus/alice_asr.tfrecord"])
+  args = parser.parse_args(["--isaudio", "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord"])
   # args = parser.parse_args()
   IS_AUDIO = args.isaudio
   EPOCHS = 10

@@ -1,3 +1,4 @@
+import psutil
 
 LOG = False
 def _print(*args,**kwargs):
