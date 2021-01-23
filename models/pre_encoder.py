@@ -1,8 +1,7 @@
 import tensorflow as tf
 class PreEncoder(tf.keras.Model):
-    def __init__(self, input_dim, output_dim, batch_sz):
+    def __init__(self, input_dim, output_dim):
         super(PreEncoder, self).__init__()
-        self.batch_sz = batch_sz
         self.cnn1 = tf.keras.layers.Conv2D(4,(3,3),strides=(2,2))
         self.cnn2 = tf.keras.layers.Conv2D(8,(3,3),strides=(2,2))
         self.cnn3 = tf.keras.layers.Conv2D(16,(3,3),strides=(2,2))
