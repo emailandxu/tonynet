@@ -1,10 +1,11 @@
-from datasets.alice_dataset.dataloader import Dataloader
+from .datasets.alice_dataset.dataloader import Dataloader
+from .datasets.aishell_dataset.databuilder.main import AishellDatasetBuilder
 import tensorflow as tf
 import time, os 
-from models import *
+from .models import *
 import pdb
 from functools import wraps
-from util.mem_check_util import mem_check
+from .util.mem_check_util import mem_check
 import logging
 
 class SpeechTranslationTask():
@@ -16,7 +17,7 @@ class SpeechTranslationTask():
     self.summary_writer = tf.summary.create_file_writer(self.tensorboard_dir)     # 参数为记录文件所保存的目录
 
     #--- init dataset ---
-    self.alice_asr_ds, self.trans_tokenizer, \
+    self.asr_ds, self.trans_tokenizer, \
     self.vocab_src_size, self.vocab_tar_size = SpeechTranslationTask.ds_builder(args)
    
     #--- init model ---
@@ -37,15 +38,23 @@ class SpeechTranslationTask():
     self.model_load()
 
     for epoch in range(EPOCHS):
-      for (batch, (inp, targ)) in enumerate(self.alice_asr_ds.shuffle(BATCH_SIZE*2).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
+      for (batch, (inp, targ)) in enumerate(self.asr_ds.shuffle(BATCH_SIZE*2).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
         batch_loss = self.train_step(inp, targ).numpy()    
         yield epoch, batch, batch_loss
 
+      # 每 2 个周期（epoch），保存（检查点）一次模型
+      if (epoch + 1) % 2 == 0:
+        self.model_save()
+    
   @staticmethod
   def ds_builder(args):
-    dl = Dataloader(filename=[args.dataset])
-    alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
-    alice_asr_ds,_ = dl.get_alice_asr_dataset()
+    # dl = Dataloader(filename=[args.dataset])
+    # alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
+    # alice_asr_ds,_ = dl.get_alice_asr_dataset()
+
+    aishell = AishellDatasetBuilder("train", trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
+    trans_tokenizer = aishell.trans_tokenizer
+    asr_ds = aishell()
     if args.is_audio:
       trans_tokenizer = trans_tokenizer
       vocab_src_size = len(trans_tokenizer.word_index) + 1 
@@ -53,7 +62,7 @@ class SpeechTranslationTask():
     else:
       pass
 
-    return alice_asr_ds, trans_tokenizer, vocab_src_size, vocab_tar_size
+    return asr_ds, trans_tokenizer, vocab_src_size, vocab_tar_size
   
   @staticmethod
   def model_builder(args, vocab_src_size, vocab_tar_size):
@@ -63,7 +72,7 @@ class SpeechTranslationTask():
     pre_encoder_output_dim = 128
 
     if args.is_audio:
-      pre_encoder_input_dim = 257
+      pre_encoder_input_dim = 40
     else:
       pre_encoder_input_dim = args.vocab_src_size
 
@@ -153,14 +162,16 @@ class SpeechTranslationTask():
     self.optimizer.apply_gradients(zip(gradients, variables))
     return batch_loss
 
+  def eval_step(self):
+    pass
 
 
 def main():
-  from base_option import parser
+  from .base_option import parser
   args = parser.parse_args([
     "--is_audio", 
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","64",
+    "--batch_sz","256",
     "--epoch","100",
     "--checkpoint_dir","./training_checkpoints"
   ])
@@ -177,10 +188,6 @@ def main():
 
     with task.summary_writer.as_default():
       tf.summary.scalar("batchLoss", batch_loss, step=idx)
-
-    # 每 2 个周期（epoch），保存（检查点）一次模型
-    if (epoch + 1) % 10 == 0:
-      task.model_save()
 
 
 if __name__ == "__main__":

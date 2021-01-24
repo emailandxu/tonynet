@@ -38,6 +38,6 @@ def tf_serialize_asr_example(serialized_spec, serialized_trans):
     )
     return tf.reshape(tf_string, ()) # The result is a scalar
 
-def write_tfrecord(serialized_features_ds, filename='asr.tfrecord'):
-  writer = tf.data.experimental.TFRecordWriter(filename)
+def write_tfrecord(serialized_features_ds, filepath='alice_asr.tfrecord'):
+  writer = tf.data.experimental.TFRecordWriter(filepath)
   writer.write(serialized_features_ds)
