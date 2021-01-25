@@ -1,11 +1,11 @@
-from .datasets.alice_dataset.dataloader import Dataloader
-from .datasets.aishell_dataset.databuilder.main import AishellDatasetBuilder
+from datasets.alice_dataset.dataloader import Dataloader
+from datasets.aishell_dataset.databuilder.main import AishellDatasetBuilder
 import tensorflow as tf
 import time, os 
-from .models import *
+from models import *
 import pdb
 from functools import wraps
-from .util.mem_check_util import mem_check
+from util.mem_check_util import mem_check
 import logging
 
 class SpeechTranslationTask():
@@ -13,7 +13,7 @@ class SpeechTranslationTask():
     self.args = args
 
     #-- init tensorboard ---
-    self.tensorboard_dir = './tensorboard'
+    self.tensorboard_dir = args.tensorboard_dir 
     self.summary_writer = tf.summary.create_file_writer(self.tensorboard_dir)     # 参数为记录文件所保存的目录
 
     #--- init dataset ---
@@ -167,13 +167,14 @@ class SpeechTranslationTask():
 
 
 def main():
-  from .base_option import parser
+  from base_option import parser
   args = parser.parse_args([
     "--is_audio", 
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","256",
+    "--batch_sz","380",
     "--epoch","100",
-    "--checkpoint_dir","./training_checkpoints"
+    "--checkpoint_dir","/home/tony/D/training_checkpoints",
+    "--tensorboard_dir","/home/tony/D/tensorboard"
   ])
   print(args)
 
