@@ -1,7 +1,7 @@
 from datasets.alice_dataset.dataloader import Dataloader
 from datasets.aishell_dataset.databuilder.main import AishellDatasetBuilder
 import tensorflow as tf
-import time, os 
+import time, os , datetime
 from models import *
 import pdb
 from functools import wraps
@@ -14,7 +14,10 @@ class SpeechTranslationTask():
 
     #-- init tensorboard ---
     self.tensorboard_dir = args.tensorboard_dir 
-    self.summary_writer = tf.summary.create_file_writer(self.tensorboard_dir)     # 参数为记录文件所保存的目录
+
+    summar_dir = os.path.join(self.tensorboard_dir, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    print(f"tensorboard dir:{summar_dir}")
+    self.summary_writer = tf.summary.create_file_writer(summar_dir)     # 参数为记录文件所保存的目录
 
     #--- init dataset ---
     self.asr_ds, self.trans_tokenizer, \
@@ -38,7 +41,7 @@ class SpeechTranslationTask():
     self.model_load()
 
     for epoch in range(EPOCHS):
-      for (batch, (inp, targ)) in enumerate(self.asr_ds.shuffle(BATCH_SIZE*2).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
+      for (batch, (inp, targ)) in enumerate(self.asr_ds.shuffle(BATCH_SIZE*5).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
         batch_loss = self.train_step(inp, targ).numpy()    
         yield epoch, batch, batch_loss
 
@@ -88,8 +91,9 @@ class SpeechTranslationTask():
       embedding_dim=dec_embedding_dim, 
       dec_units=decoder_units 
     )
-
-    optimizer = tf.keras.optimizers.Adam()
+    learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=.01, decay_steps=20, decay_rate=.1)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
     
@@ -171,7 +175,7 @@ def main():
   args = parser.parse_args([
     "--is_audio", 
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","380",
+    "--batch_sz","320",
     "--epoch","100",
     "--checkpoint_dir","/home/tony/D/training_checkpoints",
     "--tensorboard_dir","/home/tony/D/tensorboard"
