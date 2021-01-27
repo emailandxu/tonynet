@@ -8,6 +8,11 @@ from functools import wraps
 from util.mem_check_util import mem_check
 import logging
 
+class Seq2Seq():
+  def __init__(self):
+    pass
+  
+
 class SpeechTranslationTask():
   def __init__(self,args):
     self.args = args
@@ -175,10 +180,11 @@ def main():
   args = parser.parse_args([
     "--is_audio", 
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","320",
+    "--batch_sz","256",
     "--epoch","100",
     "--checkpoint_dir","/home/tony/D/training_checkpoints",
-    "--tensorboard_dir","/home/tony/D/tensorboard"
+    "--tensorboard_dir","/home/tony/D/tensorboard",
+    "--mode", "train"
   ])
   print(args)
 
