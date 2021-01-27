@@ -92,7 +92,7 @@ class SpeechTranslationTask():
       dec_units=decoder_units 
     )
     learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=.01, decay_steps=20, decay_rate=.1)
+        initial_learning_rate=0.1, decay_steps=100000, decay_rate=.96)
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
@@ -177,8 +177,8 @@ def main():
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
     "--batch_sz","320",
     "--epoch","100",
-    "--checkpoint_dir","/home/tony/D/training_checkpoints",
-    "--tensorboard_dir","/home/tony/D/tensorboard"
+    "--checkpoint_dir","/home/tony/D/exp/training_checkpoints",
+    "--tensorboard_dir","/home/tony/D/exp/tensorboard"
   ])
   print(args)
 
@@ -193,6 +193,7 @@ def main():
 
     with task.summary_writer.as_default():
       tf.summary.scalar("batchLoss", batch_loss, step=idx)
+      tf.summary.scalar("learning rate", task.optimizer._decayed_lr(tf.float32), step=idx)
 
 
 if __name__ == "__main__":
