@@ -92,7 +92,7 @@ class SpeechTranslationTask():
       dec_units=decoder_units 
     )
     learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=0.1, decay_steps=100000, decay_rate=.96)
+        initial_learning_rate=0.001, decay_steps=100000, decay_rate=.96)
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
