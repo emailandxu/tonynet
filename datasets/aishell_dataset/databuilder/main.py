@@ -3,12 +3,12 @@ import numpy as np
 import os
 import pathlib
 import tensorflow_io as tfio
-from .tfrecord_util import tf_serialize_asr_example, write_tfrecord
+from tfrecord_util import tf_serialize_asr_example, write_tfrecord
 import pickle
 
 class AishellDatasetBuilder():
 
-    def __init__(self, subset, trans_mode="text", audio_mode="path", ds_model="raw", aishell_audio_root="/home/tony/D/corpus/data_aishell/wav", aishell_transcript_root="/home/tony/D/corpus/data_aishell/transcript", tfrecord_root="/home/tony/D/corpus/data_aishell/tfrecord/"):
+    def __init__(self, subset, trans_mode="text", audio_mode="path", ds_model="raw", aishell_audio_root="/home/tony/D/corpus/data_aishell/wav", aishell_transcript_root="/home/tony/D/corpus/data_aishell/transcript", tfrecord_root="/home/tony/D/corpus/data_aishell/tfrecord/", tokenizer_num_words=3000):
         """ 
         trans_mode: text, tensor 
         audio_mode: path, spec
@@ -25,6 +25,7 @@ class AishellDatasetBuilder():
         self.tfrecord_path = os.path.join(tfrecord_root, f"{self.subset}-asr.tfrecod")
         self.trans_tokenizer_path = os.path.join(tfrecord_root, "tokenizer.pkl")
 
+        self.tokenizer_num_words = tokenizer_num_words
 
         self.feature_description = {
             'spec_feature': tf.io.FixedLenFeature([], tf.string, default_value=''),
@@ -33,7 +34,7 @@ class AishellDatasetBuilder():
 
 
         if self.ds_model == "raw":
-            self._trans_dict, self.trans_tokenizer = AishellDatasetBuilder.build_transcript(self.aishell_transcript_root, self.trans_mode)
+            self._trans_dict, self.trans_tokenizer = AishellDatasetBuilder.build_transcript(self.aishell_transcript_root, self.trans_mode,self.tokenizer_num_words)
             self.asr_ds = AishellDatasetBuilder.build_asr_ds([subset],self._trans_dict, self.aishell_audio_root, self.audio_mode)
         elif self.ds_model == "tfrecord":
             self.asr_ds, self.trans_tokenizer = AishellDatasetBuilder.read_tfrecord(self.trans_tokenizer_path, self.tfrecord_path, self.feature_description)
@@ -118,16 +119,16 @@ class AishellDatasetBuilder():
         return tf.data.Dataset.zip((audio_ds_dict[audio_mode],trans_ds))
         
     @staticmethod
-    def build_transcript(aishell_transcript_root, trans_mode):
+    def build_transcript(aishell_transcript_root, trans_mode, num_words):
         def tokenize(trans):
-            trans_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
+            trans_tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=num_words, filters='')
             trans_tokenizer.fit_on_texts(trans)
             trans_tensors = trans_tokenizer.texts_to_sequences(trans)
             trans_tensors = tf.keras.preprocessing.sequence.pad_sequences(trans_tensors, padding='post')
             trans_tensors = tuple(np.array(tensor) for tensor in trans_tensors)
             return trans_tensors, trans_tokenizer
         audiokey_trans = [i.split(" ", 1) for i in open(f"{aishell_transcript_root}/aishell_transcript_v0.8.txt", "r", encoding="utf-8")]
-        trans = ["<start> " + t.strip() + " <end>" for _,t in audiokey_trans]
+        trans = ["<start> " + " ".join(list(t.strip().replace(" ",""))) + " <end>" for _,t in audiokey_trans]
         audiokey = [key for key,_ in audiokey_trans]
         # converted to indexes
         trans_tensors, trans_tokenizer = tokenize(trans)
@@ -164,10 +165,12 @@ class AishellDatasetBuilder():
 if __name__ == "__main__":
     aishell = AishellDatasetBuilder("train",trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
     last_idx = 0
-    for idx, (trans, spec) in enumerate(aishell()):
+    for idx, (spec, trans) in enumerate(aishell().take(5)):
         print(trans.shape, spec.shape)
+        print(trans)
         last_idx = idx
     print(last_idx)
     # aishell.write_tfrecord()
+
 
 

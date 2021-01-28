@@ -7,10 +7,8 @@ import pdb
 from functools import wraps
 from util.mem_check_util import mem_check
 import logging
+from metrics.wer import calc_wer
 
-class Seq2Seq():
-  def __init__(self):
-    pass
   
 
 class SpeechTranslationTask():
@@ -42,17 +40,36 @@ class SpeechTranslationTask():
     self.checkpoint_dir = self.args.checkpoint_dir
     self.ckpt_manager = tf.train.CheckpointManager(self.checkpoint, directory=self.checkpoint_dir, max_to_keep=3)
 
-  def __call__(self, EPOCHS, BATCH_SIZE):
+    if self.args.mode == "train":
+      self.batch_sz = self.args.batch_sz
+    elif self.args.mode == "eval":
+      self.batch_sz = 1
+
+  def train(self):
     self.model_load()
+
+    EPOCHS = self.args.epoch
+    BATCH_SIZE = self.batch_sz
 
     for epoch in range(EPOCHS):
       for (batch, (inp, targ)) in enumerate(self.asr_ds.shuffle(BATCH_SIZE*5).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
-        batch_loss = self.train_step(inp, targ).numpy()    
-        yield epoch, batch, batch_loss
+        step_info = self.train_step(inp, targ)    
+        step_output = step_info if step_info else {} # in case of None value
+        yield { "_epoch":epoch, "_batch":batch, **step_output}
 
       # 每 2 个周期（epoch），保存（检查点）一次模型
       if (epoch + 1) % 2 == 0:
         self.model_save()
+  
+  def eval(self):
+    for inp, targ in self.asr_ds.batch(1).take(5):
+      yield self.eval_step(inp,targ)
+
+  def __call__(self):
+    if self.args.mode == "train":
+      return self.train()
+    elif self.args.mode == "eval":
+      return self.eval()
     
   @staticmethod
   def ds_builder(args):
@@ -113,13 +130,16 @@ class SpeechTranslationTask():
       print("Training model from scratch!")
 
   def model_save(self):
-    self.ckpt_manager.save()
+    if self.args.mode == "train":
+      self.ckpt_manager.save()
+    else:
+      print("Not in training mode, abort model save!")
 
   def encoder_init_state(self):
-    return self.encoder.initialize_hidden_state(self.args.batch_sz)
+    return self.encoder.initialize_hidden_state(self.batch_sz)
 
   def decoder_init_input(self):
-    return [self.trans_tokenizer.word_index['<start>']] * self.args.batch_sz
+    return [self.trans_tokenizer.word_index['<start>']] * self.batch_sz
 
   def loss_function(self, real, pred):
     # mask padding token
@@ -133,6 +153,38 @@ class SpeechTranslationTask():
 
     return tf.reduce_mean(loss_)
 
+
+  def eval_step(self,inp, targ):
+    enc_hidden = self.encoder_init_state()
+
+    # 执行编码
+    enc_output, enc_hidden = self.encoder(inp, enc_hidden)
+    # 拷贝编码状态
+    dec_hidden = enc_hidden
+    # 准备解码输入
+    dec_input = tf.expand_dims(self.decoder_init_input() , 1)
+
+    result =  ''      
+
+    # 教师强制 - 将目标词作为下一个输入
+    for t in range(1, targ.shape[1]):
+      # 单个时间步解码预测
+      # 将编码器输出 （enc_output） 传送至解码器
+      predictions, dec_hidden, attention_weights = self.decoder(dec_input, dec_hidden, enc_output)
+      predicted_id = tf.argmax(predictions[0]).numpy()
+
+      # 准备下个时间步解码输入
+      # 预测的 ID 被输送回模型
+      # dec_input = tf.expand_dims([predicted_id], 0)
+      # 使用教师强制
+      dec_input = tf.expand_dims(targ[:, t], 1)
+
+      result += self.trans_tokenizer.index_word[predicted_id] + ' '
+    
+    return  {"_result":result}
+
+
+
   def train_step(self, inp, targ):
     loss = 0
     
@@ -140,27 +192,22 @@ class SpeechTranslationTask():
 
     with tf.GradientTape() as tape:
       
-      with mem_check("执行编码"):
-        enc_output, enc_hidden = self.encoder(inp, enc_hidden)
-
-      with mem_check("拷贝编码状态"):
-        dec_hidden = enc_hidden
-
-      with mem_check("准备解码输入"):
-        dec_input = tf.expand_dims(self.decoder_init_input() , 1)
-
+      # 执行编码
+      enc_output, enc_hidden = self.encoder(inp, enc_hidden)
+      # 拷贝编码状态
+      dec_hidden = enc_hidden
+      # 准备解码输入
+      dec_input = tf.expand_dims(self.decoder_init_input() , 1)
       # 教师强制 - 将目标词作为下一个输入
       for t in range(1, targ.shape[1]):
-        with mem_check("单个时间步解码预测"):
-          # 将编码器输出 （enc_output） 传送至解码器
-          predictions, dec_hidden, _ = self.decoder(dec_input, dec_hidden, enc_output)
-        with mem_check("单个时间步计算损失"):
-          # print(t, targ[:,t].shape, predictions.shape)
-          loss += self.loss_function(targ[:, t], predictions)
-
-        with mem_check("准备下个时间步解码输入"):
-          # 使用教师强制
-          dec_input = tf.expand_dims(targ[:, t], 1)
+        # 单个时间步解码预测
+        # 将编码器输出 （enc_output） 传送至解码器
+        predictions, dec_hidden, _ = self.decoder(dec_input, dec_hidden, enc_output)
+        # 单个时间步计算损失
+        loss += self.loss_function(targ[:, t], predictions)
+        # 准备下个时间步解码输入
+        # 使用教师强制
+        dec_input = tf.expand_dims(targ[:, t], 1)
 
     batch_loss = (loss / int(targ.shape[1]))
 
@@ -169,11 +216,7 @@ class SpeechTranslationTask():
     gradients = tape.gradient(loss, variables)
 
     self.optimizer.apply_gradients(zip(gradients, variables))
-    return batch_loss
-
-  def eval_step(self):
-    pass
-
+    return { "batchLoss": batch_loss, "learningRate":self.optimizer._decayed_lr(tf.float32)}
 
 def main():
   from base_option import parser
@@ -183,23 +226,28 @@ def main():
     "--batch_sz","256",
     "--epoch","100",
     "--checkpoint_dir","/home/tony/D/exp/training_checkpoints",
-    "--tensorboard_dir","/home/tony/D/exp/tensorboard"
+    "--tensorboard_dir","/home/tony/D/exp/tensorboard",
+    "--mode","eval"
   ])
   print(args)
 
 
   task = SpeechTranslationTask(args)
  
-  for idx, (epoch,batch,batch_loss) in enumerate(task(EPOCHS=args.epoch, BATCH_SIZE=args.batch_sz)):
-
-    steps_per_epoch = 324//args.batch_sz
-
-    print('Epoch {} Batch {} Loss {:.4f}'.format(epoch + 1, batch, batch_loss))  
-
-    with task.summary_writer.as_default():
-      tf.summary.scalar("batchLoss", batch_loss, step=idx)
-      tf.summary.scalar("learning rate", task.optimizer._decayed_lr(tf.float32), step=idx)
-
+  for idx, info in enumerate(task()):
+    
+    # --- print info ---
+    handle_tensor = lambda value: value.numpy() if isinstance(value, tf.Tensor) else value
+    handle_start_udl = lambda key: key[1:] if key.startswith("_") else key
+    string_infos = [f"{handle_start_udl(key)}: {handle_tensor(value)}" for key, value in info.items()]
+    print(*string_infos, sep=" | ")  
+    
+    # --- write tensorboard ---
+    if args.mode == "train":
+      with task.summary_writer.as_default():
+        for key in info:
+          if not key.startswith("_"):
+            tf.summary.scalar(key, info[key], step=idx)
 
 if __name__ == "__main__":
   main()
