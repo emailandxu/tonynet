@@ -25,7 +25,8 @@ class SpeechTranslationTask():
     #--- init dataset ---
     self.asr_ds, self.trans_tokenizer, \
     self.vocab_src_size, self.vocab_tar_size = SpeechTranslationTask.ds_builder(args)
-   
+    self.trans_tokenizer.index_word.update({0:"<pad>"})
+
     #--- init model ---
     self.encoder, self.decoder, \
     self.optimizer, self.loss_object = SpeechTranslationTask.model_builder(args, self.vocab_src_size, self.vocab_tar_size)
@@ -114,7 +115,7 @@ class SpeechTranslationTask():
       dec_units=decoder_units 
     )
     learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=0.001, decay_steps=100000, decay_rate=.96)
+        initial_learning_rate=0.005, decay_steps=20000, decay_rate=.90)
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
@@ -179,9 +180,12 @@ class SpeechTranslationTask():
       # 使用教师强制
       dec_input = tf.expand_dims(targ[:, t], 1)
 
-      result += self.trans_tokenizer.index_word[predicted_id] + ' '
+      result += self.trans_tokenizer.index_word[predicted_id]
+
+      if targ[:,t] == 0:
+        break
     
-    return  {"_result":result}
+    return  {"_result":result, "_targ":"".join([self.trans_tokenizer.index_word[i.numpy()] for i in targ[0] if i not in (0,1,2)])}
 
 
 
@@ -208,6 +212,9 @@ class SpeechTranslationTask():
         # 准备下个时间步解码输入
         # 使用教师强制
         dec_input = tf.expand_dims(targ[:, t], 1)
+        a = tf.reduce_sum(targ[:,t])
+        if a==0:
+          break
 
     batch_loss = (loss / int(targ.shape[1]))
 
@@ -248,6 +255,13 @@ def main():
         for key in info:
           if not key.startswith("_"):
             tf.summary.scalar(key, info[key], step=idx)
+
+  # task = SpeechTranslationTask(args)
+  # for spec, trans in task.asr_ds.take(5):
+  #   indexs = list(trans.numpy())
+  #   task.trans_tokenizer.index_word.update({0:"<pad>"})
+  #   a = "".join([task.trans_tokenizer.index_word[i] for i in indexs if i != 0])
+  #   print(a)
 
 if __name__ == "__main__":
   main()

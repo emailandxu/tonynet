@@ -3,7 +3,7 @@ import numpy as np
 import os
 import pathlib
 import tensorflow_io as tfio
-from tfrecord_util import tf_serialize_asr_example, write_tfrecord
+from .tfrecord_util import tf_serialize_asr_example, write_tfrecord
 import pickle
 
 class AishellDatasetBuilder():
