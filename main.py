@@ -63,6 +63,7 @@ class SpeechTranslationTask():
         self.model_save()
   
   def eval(self):
+    self.model_load()
     for inp, targ in self.asr_ds.batch(1).take(5):
       yield self.eval_step(inp,targ)
 
@@ -74,13 +75,14 @@ class SpeechTranslationTask():
     
   @staticmethod
   def ds_builder(args):
-    # dl = Dataloader(filename=[args.dataset])
-    # alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
-    # alice_asr_ds,_ = dl.get_alice_asr_dataset()
+    dl = Dataloader(filename=[args.dataset])
+    alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
+    asr_ds,_ = dl.get_alice_asr_dataset()
 
-    aishell = AishellDatasetBuilder("train", trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
-    trans_tokenizer = aishell.trans_tokenizer
-    asr_ds = aishell()
+    # aishell = AishellDatasetBuilder("train", trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
+    # trans_tokenizer = aishell.trans_tokenizer
+    # asr_ds = aishell()
+
     if args.is_audio:
       trans_tokenizer = trans_tokenizer
       vocab_src_size = len(trans_tokenizer.word_index) + 1 
@@ -176,16 +178,16 @@ class SpeechTranslationTask():
 
       # 准备下个时间步解码输入
       # 预测的 ID 被输送回模型
-      # dec_input = tf.expand_dims([predicted_id], 0)
+      dec_input = tf.expand_dims([predicted_id], 0)
       # 使用教师强制
-      dec_input = tf.expand_dims(targ[:, t], 1)
+      # dec_input = tf.expand_dims(targ[:, t], 1)
 
-      result += self.trans_tokenizer.index_word[predicted_id]
+      result += self.trans_tokenizer.index_word[predicted_id] + " "
 
       if targ[:,t] == 0:
         break
     
-    return  {"_result":result, "_targ":"".join([self.trans_tokenizer.index_word[i.numpy()] for i in targ[0] if i not in (0,1,2)])}
+    return  {"_result":result, "_targ":" ".join([self.trans_tokenizer.index_word[i.numpy()] for i in targ[0] if i not in (0,1,2)])}
 
 
 
@@ -230,11 +232,11 @@ def main():
   args = parser.parse_args([
     "--is_audio", 
     "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","256",
+    "--batch_sz","64",
     "--epoch","100",
     "--checkpoint_dir","/home/tony/D/exp/training_checkpoints",
     "--tensorboard_dir","/home/tony/D/exp/tensorboard",
-    "--mode","eval"
+    "--mode","train"
   ])
   print(args)
 
