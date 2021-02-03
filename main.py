@@ -10,6 +10,25 @@ import logging
 from metrics.wer import calc_wer
 
   
+train_step_signature = [
+    tf.TensorSpec(shape=(None,None, None), dtype=tf.float32),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int64),
+]
+
+class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+  def __init__(self, d_model, warmup_steps=4000):
+    super(CustomSchedule, self).__init__()
+
+    self.d_model = d_model
+    self.d_model = tf.cast(self.d_model, tf.float32)
+
+    self.warmup_steps = warmup_steps
+
+  def __call__(self, step):
+    arg1 = tf.math.rsqrt(step)
+    arg2 = step * (self.warmup_steps ** -1.5)
+
+    return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
 class SpeechTranslationTask():
   def __init__(self,args):
@@ -28,16 +47,20 @@ class SpeechTranslationTask():
     self.trans_tokenizer.index_word.update({0:"<pad>"})
 
     #--- init model ---
-    self.encoder, self.decoder, \
+    self.preModel, self.transformer, \
     self.optimizer, self.loss_object = SpeechTranslationTask.model_builder(args, self.vocab_src_size, self.vocab_tar_size)
-    
+    self.train_loss = tf.keras.metrics.Mean(name='train_loss')
+    self.train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(
+    name='train_accuracy')
+
     #--- init checkpoint manager  ---
     self.checkpoint = tf.train.Checkpoint(
       optimizer=self.optimizer,
-      encoder=self.encoder,
-      decoder=self.decoder
+      preModel=self.preModel,
+      transformer=self.transformer
     )
-    self.checkpoint_prefix = os.path.join(self.args.checkpoint_dir, "ckpt")
+
+    self.checkpoint_prefix = os.path.join(self.args.checkpoint_dir, self.args.checkpoint_name)
     self.checkpoint_dir = self.args.checkpoint_dir
     self.ckpt_manager = tf.train.CheckpointManager(self.checkpoint, directory=self.checkpoint_dir, max_to_keep=3)
 
@@ -53,6 +76,10 @@ class SpeechTranslationTask():
     BATCH_SIZE = self.batch_sz
 
     for epoch in range(EPOCHS):
+
+      self.train_loss.reset_states()
+      self.train_accuracy.reset_states()
+
       for (batch, (inp, targ)) in enumerate(self.asr_ds.shuffle(BATCH_SIZE*5).padded_batch(BATCH_SIZE, padded_shapes=([None,None],[None]), drop_remainder=True)):
         step_info = self.train_step(inp, targ)    
         step_output = step_info if step_info else {} # in case of None value
@@ -74,13 +101,15 @@ class SpeechTranslationTask():
     
   @staticmethod
   def ds_builder(args):
-    # dl = Dataloader(filename=[args.dataset])
-    # alice_text_ds, trans_tokenizer = dl.get_alice_text_dataset()
-    # alice_asr_ds,_ = dl.get_alice_asr_dataset()
+    dl = Dataloader(filename=[args.dataset])
+    _, trans_tokenizer = dl.get_alice_text_dataset()
+    asr_ds, _ = dl.get_alice_asr_dataset()
 
-    aishell = AishellDatasetBuilder("train", trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
-    trans_tokenizer = aishell.trans_tokenizer
-    asr_ds = aishell()
+    # aishell = AishellDatasetBuilder("train", trans_mode="tensor", audio_mode="spec", ds_model="tfrecord")
+    # trans_tokenizer = aishell.trans_tokenizer
+    # asr_ds = aishell()
+
+
     if args.is_audio:
       trans_tokenizer = trans_tokenizer
       vocab_src_size = len(trans_tokenizer.word_index) + 1 
@@ -92,9 +121,6 @@ class SpeechTranslationTask():
   
   @staticmethod
   def model_builder(args, vocab_src_size, vocab_tar_size):
-    dec_embedding_dim = 128
-    encoder_units = 256
-    decoder_units = 256
     pre_encoder_output_dim = 128
 
     if args.is_audio:
@@ -102,25 +128,19 @@ class SpeechTranslationTask():
     else:
       pre_encoder_input_dim = args.vocab_src_size
 
-    encoder = Encoder(
-      pre_encoder_input_dim=pre_encoder_input_dim,
-      pre_encoder_output_dim=pre_encoder_output_dim,
-      enc_units=encoder_units,
-      is_audio=args.is_audio
-    )
+    preModel = PreEncoder(pre_encoder_input_dim, pre_encoder_output_dim)
+    transformer = Transformer(4, 512, 8, 1024, pre_encoder_output_dim, vocab_tar_size)
+    learning_rate = CustomSchedule(512)
 
-    decoder = Decoder(
-      vocab_size=vocab_tar_size, 
-      embedding_dim=dec_embedding_dim, 
-      dec_units=decoder_units 
-    )
-    learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=0.005, decay_steps=20000, decay_rate=.90)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    if args.lr_schedule:
+      optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    else:
+      optimizer = tf.keras.optimizers.Adam()
+
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
     
-    return encoder, decoder, optimizer, loss_object
+    return preModel, transformer, optimizer, loss_object
 
   def model_load(self):
     latest_ckpt =  tf.train.latest_checkpoint(self.checkpoint_dir)
@@ -136,12 +156,6 @@ class SpeechTranslationTask():
     else:
       print("Not in training mode, abort model save!")
 
-  def encoder_init_state(self):
-    return self.encoder.initialize_hidden_state(self.batch_sz)
-
-  def decoder_init_input(self):
-    return [self.trans_tokenizer.word_index['<start>']] * self.batch_sz
-
   def loss_function(self, real, pred):
     # mask padding token
     mask = tf.math.logical_not(tf.math.equal(real, 0))
@@ -156,84 +170,80 @@ class SpeechTranslationTask():
 
 
   def eval_step(self,inp, targ):
-    enc_hidden = self.encoder_init_state()
 
-    # 执行编码
-    enc_output, enc_hidden = self.encoder(inp, enc_hidden)
-    # 拷贝编码状态
-    dec_hidden = enc_hidden
-    # 准备解码输入
-    dec_input = tf.expand_dims(self.decoder_init_input() , 1)
+    # 因为目标是英语，输入 transformer 的第一个词应该是
+    # 英语的开始标记。
+    decoder_input = [1]
+    output = tf.expand_dims(decoder_input, 0)
 
-    result =  ''      
+    for i in range(targ.shape[-1]):
 
-    # 教师强制 - 将目标词作为下一个输入
-    for t in range(1, targ.shape[1]):
-      # 单个时间步解码预测
-      # 将编码器输出 （enc_output） 传送至解码器
-      predictions, dec_hidden, attention_weights = self.decoder(dec_input, dec_hidden, enc_output)
-      predicted_id = tf.argmax(predictions[0]).numpy()
+      preout = self.preModel(inp)
+      _, combined_mask, _ = create_masks(inp, output)
+      enc_padding_mask = tf.zeros(preout.shape[:-1])[:, tf.newaxis, tf.newaxis,:]
+      dec_padding_mask = enc_padding_mask 
 
-      # 准备下个时间步解码输入
-      # 预测的 ID 被输送回模型
-      # dec_input = tf.expand_dims([predicted_id], 0)
-      # 使用教师强制
-      dec_input = tf.expand_dims(targ[:, t], 1)
+      # predictions.shape == (batch_size, seq_len, vocab_size)
+      predictions, attention_weights = self.transformer(preout, 
+                                                  output,
+                                                  False,
+                                                  enc_padding_mask,
+                                                  combined_mask,
+                                                  dec_padding_mask)
 
-      result += self.trans_tokenizer.index_word[predicted_id]
+      # 从 seq_len 维度选择最后一个词
+      predictions = predictions[: ,-1:, :]  # (batch_size, 1, vocab_size)
 
-      if targ[:,t] == 0:
+      predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
+      
+      # 如果 predicted_id 等于结束标记，就返回结果
+      if predicted_id == 2:
+        a = tf.squeeze(output, axis=0), attention_weights
         break
-    
-    return  {"_result":result, "_targ":"".join([self.trans_tokenizer.index_word[i.numpy()] for i in targ[0] if i not in (0,1,2)])}
+      
+      # 连接 predicted_id 与输出，作为解码器的输入传递到解码器。
+      output = tf.concat([output, predicted_id], axis=-1)
+
+    return  {"_result":" ".join([self.trans_tokenizer.index_word[i.numpy()] for i in output[0] if i not in (0,1,2)]), "_targ":" ".join([self.trans_tokenizer.index_word[i.numpy()] for i in targ[0] if i not in (0,1,2)])}
 
 
-
-  def train_step(self, inp, targ):
-    loss = 0
-    
-    enc_hidden = self.encoder_init_state()
+  # @tf.function(input_signature=train_step_signature)
+  def train_step(self, inp, tar):
+    tar_inp = tar[:, :-1]
+    tar_real = tar[:, 1:]
 
     with tf.GradientTape() as tape:
-      
-      # 执行编码
-      enc_output, enc_hidden = self.encoder(inp, enc_hidden)
-      # 拷贝编码状态
-      dec_hidden = enc_hidden
-      # 准备解码输入
-      dec_input = tf.expand_dims(self.decoder_init_input() , 1)
-      # 教师强制 - 将目标词作为下一个输入
-      for t in range(1, targ.shape[1]):
-        # 单个时间步解码预测
-        # 将编码器输出 （enc_output） 传送至解码器
-        predictions, dec_hidden, _ = self.decoder(dec_input, dec_hidden, enc_output)
-        # 单个时间步计算损失
-        loss += self.loss_function(targ[:, t], predictions)
-        # 准备下个时间步解码输入
-        # 使用教师强制
-        dec_input = tf.expand_dims(targ[:, t], 1)
-        a = tf.reduce_sum(targ[:,t])
-        if a==0:
-          break
+      preout = self.preModel(inp)
+      _, combined_mask, dec_padding_mask = create_masks(inp, tar_inp)
+      enc_padding_mask = tf.zeros(preout.shape[:-1])[:, tf.newaxis, tf.newaxis,:]
+      dec_padding_mask = enc_padding_mask 
 
-    batch_loss = (loss / int(targ.shape[1]))
+      predictions, _ = self.transformer(preout, tar_inp, 
+                                  True, 
+                                  enc_padding_mask, 
+                                  combined_mask, 
+                                  dec_padding_mask)
+      loss = self.loss_function(tar_real, predictions)
 
-    variables = self.encoder.trainable_variables + self.decoder.trainable_variables
+    gradients = tape.gradient(loss, self.transformer.trainable_variables)    
+    self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
+    
+    self.train_loss(loss)
+    self.train_accuracy(tar_real, predictions)
 
-    gradients = tape.gradient(loss, variables)
-
-    self.optimizer.apply_gradients(zip(gradients, variables))
-    return { "batchLoss": batch_loss, "learningRate":self.optimizer._decayed_lr(tf.float32)}
+    return { "batchLoss": self.train_loss.result(), "trainAcc":self.train_accuracy.result(),"learningRate":self.optimizer._decayed_lr(tf.float32)}
 
 def main():
   from base_option import parser
   args = parser.parse_args([
     "--is_audio", 
-    "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
-    "--batch_sz","256",
-    "--epoch","100",
+    "--dataset","/home/tony/D/corpus/AliceCorpus/alice_asr.tfrecord",
+    "--batch_sz","64",
+    "--epoch","500",
     "--checkpoint_dir","/home/tony/D/exp/training_checkpoints",
+    "--checkpoint_name","ckpt",
     "--tensorboard_dir","/home/tony/D/exp/tensorboard",
+    "--lr_schedule",
     "--mode","eval"
   ])
   print(args)
