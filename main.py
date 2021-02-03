@@ -90,7 +90,8 @@ class SpeechTranslationTask():
         self.model_save()
   
   def eval(self):
-    for inp, targ in self.asr_ds.batch(1).take(5):
+    self.model_load(expect_partial=True)
+    for inp, targ in self.asr_ds.batch(1).take(35):
       yield self.eval_step(inp,targ)
 
   def __call__(self):
@@ -133,6 +134,7 @@ class SpeechTranslationTask():
     learning_rate = CustomSchedule(512)
 
     if args.lr_schedule:
+      print("learning rate decay")
       optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     else:
       optimizer = tf.keras.optimizers.Adam()
@@ -142,11 +144,14 @@ class SpeechTranslationTask():
     
     return preModel, transformer, optimizer, loss_object
 
-  def model_load(self):
+  def model_load(self, expect_partial=False):
     latest_ckpt =  tf.train.latest_checkpoint(self.checkpoint_dir)
     if latest_ckpt:
       print("Found existed ckpt, loadding...")
-      self.checkpoint.restore(latest_ckpt)
+      if expect_partial:
+        self.checkpoint.restore(latest_ckpt).expect_partial()
+      else:
+        self.checkpoint.restore(latest_ckpt)
     else:
       print("Training model from scratch!")
 
@@ -170,7 +175,6 @@ class SpeechTranslationTask():
 
 
   def eval_step(self,inp, targ):
-
     # 因为目标是英语，输入 transformer 的第一个词应该是
     # 英语的开始标记。
     decoder_input = [1]
@@ -237,11 +241,11 @@ def main():
   from base_option import parser
   args = parser.parse_args([
     "--is_audio", 
-    "--dataset","/home/tony/D/corpus/AliceCorpus/alice_asr.tfrecord",
+    "--dataset","/home/tony/D/corpus/Alicecorpus/alice_asr.tfrecord",
     "--batch_sz","64",
     "--epoch","500",
     "--checkpoint_dir","/home/tony/D/exp/training_checkpoints",
-    "--checkpoint_name","ckpt",
+    "--checkpoint_name","transformer",
     "--tensorboard_dir","/home/tony/D/exp/tensorboard",
     "--lr_schedule",
     "--mode","eval"
@@ -258,6 +262,7 @@ def main():
     handle_start_udl = lambda key: key[1:] if key.startswith("_") else key
     string_infos = [f"{handle_start_udl(key)}: {handle_tensor(value)}" for key, value in info.items()]
     print(*string_infos, sep=" | ")  
+    print("----")
     
     # --- write tensorboard ---
     if args.mode == "train":
