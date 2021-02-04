@@ -1,6 +1,7 @@
 import tensorflow as tf
 import time
 import numpy as np
+from . import PreEncoder
 
 def get_angles(pos, i, d_model):
   angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
@@ -222,7 +223,7 @@ class Encoder(tf.keras.layers.Layer):
     seq_len = tf.shape(x)[1]
     
     # 将嵌入和位置编码相加。
-    x = self.embedding(x)  # (batch_size, input_seq_len, d_model)
+    # x = self.embedding(x)  # (batch_size, input_seq_len, d_model)
     x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
     x += self.pos_encoding[:, :seq_len, :]
 
@@ -271,22 +272,28 @@ class Decoder(tf.keras.layers.Layer):
     return x, attention_weights
 
 class Transformer(tf.keras.Model):
-  def __init__(self, num_layers, d_model, num_heads, dff, encoder_input_dim, 
+  def __init__(self, num_layers, ed_model, dd_model, num_heads, dff, preencoder_input_dim, 
                target_vocab_size,  pe_input=10000, pe_target=6000, rate=0.1):
     super(Transformer, self).__init__()
 
-    self.encoder = Encoder(num_layers, d_model, num_heads, dff, 
-                           encoder_input_dim, pe_input, rate)
+    self.preModel = PreEncoder(preencoder_input_dim, ed_model)
 
-    self.decoder = Decoder(num_layers, d_model, num_heads, dff, 
+    self.encoder = Encoder(num_layers, ed_model, num_heads, dff, 
+                           ed_model, pe_input, rate)
+
+    self.decoder = Decoder(num_layers, dd_model, num_heads, dff, 
                            target_vocab_size, pe_target, rate)
 
     self.final_layer = tf.keras.layers.Dense(target_vocab_size)
     
-  def call(self, inp, tar, training, enc_padding_mask, 
-           look_ahead_mask, dec_padding_mask):
+  def call(self, inp, tar, training):
+      
+    preout = self.preModel(inp)
+    _, look_ahead_mask, dec_padding_mask = create_masks(inp, tar)
+    enc_padding_mask = tf.zeros(preout.shape[:-1])[:, tf.newaxis, tf.newaxis,:]
+    dec_padding_mask = enc_padding_mask 
 
-    enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+    enc_output = self.encoder(preout, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
     
     # dec_output.shape == (batch_size, tar_seq_len, d_model)
     dec_output, attention_weights = self.decoder(
